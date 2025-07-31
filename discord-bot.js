@@ -234,15 +234,30 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Add connection retry logic
+// Add connection retry logic with timeout
 async function connectWithRetry(maxRetries = 5) {
     for (let i = 0; i < maxRetries; i++) {
         try {
             console.log(`🔄 Attempting to connect to Discord (attempt ${i + 1}/${maxRetries})...`);
-            await client.login(process.env.DISCORD_TOKEN);
+            
+            // Create a timeout promise
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Connection timeout after 30 seconds')), 30000);
+            });
+            
+            // Race between login and timeout
+            await Promise.race([
+                client.login(process.env.DISCORD_TOKEN),
+                timeoutPromise
+            ]);
+            
+            console.log('🎉 Login promise resolved, waiting for ready event...');
             break;
         } catch (error) {
             console.error(`❌ Connection attempt ${i + 1} failed:`, error.message);
+            if (error.code) {
+                console.error('Error code:', error.code);
+            }
             if (i === maxRetries - 1) {
                 console.error('❌ Max retries reached. Exiting...');
                 process.exit(1);
@@ -253,5 +268,26 @@ async function connectWithRetry(maxRetries = 5) {
     }
 }
 
+// Add more event listeners for debugging
+client.on('debug', (info) => {
+    // Only log important debug info to avoid spam
+    if (info.includes('Heartbeat') || info.includes('Session') || info.includes('Ready')) {
+        console.log('🐛 Discord Debug:', info);
+    }
+});
+
+client.on('disconnect', () => {
+    console.log('🔌 Disconnected from Discord');
+});
+
+client.on('reconnecting', () => {
+    console.log('🔄 Reconnecting to Discord...');
+});
+
+client.on('resume', () => {
+    console.log('▶️ Resumed Discord connection');
+});
+
 // Start the bot
+console.log('🚀 Starting Discord bot connection...');
 connectWithRetry();
