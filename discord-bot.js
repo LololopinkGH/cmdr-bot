@@ -3,24 +3,46 @@ const { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes, EmbedBuild
 const axios = require('axios');
 require('dotenv').config();
 
+// Create client with additional options for better connectivity
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent
-    ]
+    ],
+    // Add WebSocket options for better connectivity
+    ws: {
+        large_threshold: 50,
+        compress: false,
+        properties: {
+            os: process.platform,
+            browser: 'discord.js',
+            device: 'discord.js'
+        }
+    },
+    // Reduce timeout issues
+    restTimeOffset: 0,
+    restWsBridgeTimeout: 5000,
+    restRequestTimeout: 60000,
+    // Disable some features that might cause issues
+    failIfNotExists: false,
+    allowedMentions: {
+        parse: ['users', 'roles'],
+        repliedUser: true
+    }
 });
 
 // Use the public URL for Render deployment
 const SERVER_URL = process.env.SERVER_URL || 'https://cmdr-bot.onrender.com';
 console.log('Using SERVER_URL:', SERVER_URL);
 
-// Debug: Log all environment variables (remove in production)
+// Debug: Log all environment variables
 console.log('Environment check:');
 console.log('- DISCORD_TOKEN:', process.env.DISCORD_TOKEN ? '✅ Set' : '❌ Missing');
 console.log('- GUILD_ID:', process.env.GUILD_ID ? '✅ Set' : '❌ Missing');
 console.log('- SERVER_URL:', SERVER_URL);
 console.log('- PORT:', process.env.PORT || 'Using default');
+console.log('- NODE_ENV:', process.env.NODE_ENV || 'Not set');
 
 // Check required environment variables
 if (!process.env.DISCORD_TOKEN) {
@@ -62,7 +84,7 @@ const commands = [
 ];
 
 async function deployCommands() {
-    const rest = new REST().setToken(process.env.DISCORD_TOKEN);
+    const rest = new REST({ timeout: 60000 }).setToken(process.env.DISCORD_TOKEN);
     
     try {
         console.log('🔄 Deploying slash commands...');
@@ -92,13 +114,13 @@ async function executeRobloxCommand(discordUserId, command, args, serverId) {
     };
     
     console.log('📤 Sending command to server:', payload);
-    console.log('🔗 POST URL:', `${SERVER_URL}/api/command`);
     
     try {
         const response = await axios.post(`${SERVER_URL}/api/command`, payload, {
-            timeout: 10000, // Increased timeout
+            timeout: 15000,
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'User-Agent': 'Discord-Roblox-Bridge/1.0'
             }
         });
         console.log('✅ Server response:', response.data);
@@ -108,9 +130,6 @@ async function executeRobloxCommand(discordUserId, command, args, serverId) {
         if (error.response) {
             console.error('Response status:', error.response.status);
             console.error('Response data:', error.response.data);
-        }
-        if (error.code === 'ECONNREFUSED') {
-            throw new Error('Cannot connect to bridge server. Server may be starting up.');
         }
         throw new Error(`Failed to send command: ${error.message}`);
     }
@@ -122,9 +141,8 @@ async function getCommandResult(commandId, maxWait = 10000) {
     
     while (Date.now() - startTime < maxWait) {
         try {
-            console.log(`🔍 Checking result for ${commandId}...`);
             const response = await axios.get(`${SERVER_URL}/api/result/${commandId}`, {
-                timeout: 3000
+                timeout: 5000
             });
             console.log('📥 Got result:', response.data);
             return response.data;
@@ -133,7 +151,6 @@ async function getCommandResult(commandId, maxWait = 10000) {
                 console.error('❌ Error getting result:', error.message);
                 throw error;
             }
-            // 404 means result not ready yet, continue waiting
         }
         
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -142,15 +159,24 @@ async function getCommandResult(commandId, maxWait = 10000) {
     throw new Error('Command execution timeout');
 }
 
+// Enhanced event listeners
 client.on('ready', async () => {
     console.log(`✅ Discord bot logged in as ${client.user.tag}`);
+    console.log(`🆔 Bot ID: ${client.user.id}`);
     console.log(`🔗 Connected to ${client.guilds.cache.size} guild(s)`);
-    console.log(`🏠 Bot is in guilds:`, client.guilds.cache.map(g => g.name).join(', '));
+    
+    if (client.guilds.cache.size > 0) {
+        console.log(`🏠 Bot is in guilds:`, client.guilds.cache.map(g => `${g.name} (${g.id})`).join(', '));
+    } else {
+        console.log('⚠️ Bot is not in any guilds! Make sure it\'s properly invited.');
+    }
+    
     await deployCommands();
 });
 
 client.on('error', (error) => {
     console.error('❌ Discord client error:', error);
+    console.error('Error stack:', error.stack);
 });
 
 client.on('warn', (warning) => {
@@ -158,15 +184,27 @@ client.on('warn', (warning) => {
 });
 
 client.on('disconnect', (event) => {
-    console.log('🔌 Disconnected from Discord:', event);
+    console.log('🔌 Disconnected from Discord. Event:', event);
 });
 
 client.on('reconnecting', () => {
     console.log('🔄 Reconnecting to Discord...');
 });
 
-client.on('resume', () => {
-    console.log('▶️ Resumed Discord connection');
+client.on('resume', (replayed) => {
+    console.log(`▶️ Resumed Discord connection. Replayed ${replayed} events.`);
+});
+
+client.on('shardError', error => {
+    console.error('❌ WebSocket connection error:', error);
+});
+
+client.on('shardReconnecting', () => {
+    console.log('🔄 WebSocket is reconnecting...');
+});
+
+client.on('shardReady', () => {
+    console.log('✅ WebSocket connection ready');
 });
 
 client.on('interactionCreate', async interaction => {
@@ -240,26 +278,28 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Improved connection function with better error handling
-async function connectWithRetry(maxRetries = 5) {
-    for (let i = 0; i < maxRetries; i++) {
+// Simplified connection function with better error handling
+async function connectWithRetry(maxRetries = 3) {
+    let lastError = null;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            console.log(`🔄 Attempting to connect to Discord (attempt ${i + 1}/${maxRetries})...`);
+            console.log(`🔄 Attempting to connect to Discord (attempt ${attempt}/${maxRetries})...`);
             
-            // Set up a timeout for the login process
-            const loginTimeout = new Promise((_, reject) => {
+            // Create a timeout promise
+            const timeoutMs = 60000; // 60 seconds
+            const timeoutPromise = new Promise((_, reject) => {
                 setTimeout(() => {
-                    reject(new Error(`Discord login timeout after 45 seconds (attempt ${i + 1})`));
-                }, 45000);
+                    reject(new Error(`Discord login timeout after ${timeoutMs/1000} seconds`));
+                }, timeoutMs);
             });
             
-            // Attempt to login with timeout
-            await Promise.race([
-                client.login(process.env.DISCORD_TOKEN),
-                loginTimeout
-            ]);
+            // Attempt login with timeout
+            const loginPromise = client.login(process.env.DISCORD_TOKEN);
             
-            console.log('✅ Login successful, waiting for ready event...');
+            await Promise.race([loginPromise, timeoutPromise]);
+            
+            console.log('✅ Login call completed, waiting for ready event...');
             
             // Wait for ready event with timeout
             await new Promise((resolve, reject) => {
@@ -267,77 +307,103 @@ async function connectWithRetry(maxRetries = 5) {
                     reject(new Error('Ready event timeout after 30 seconds'));
                 }, 30000);
                 
-                client.once('ready', () => {
+                if (client.isReady()) {
                     clearTimeout(readyTimeout);
                     resolve();
-                });
+                    return;
+                }
                 
-                // Also listen for errors during ready wait
-                client.once('error', (error) => {
+                const onReady = () => {
                     clearTimeout(readyTimeout);
+                    client.removeListener('error', onError);
+                    resolve();
+                };
+                
+                const onError = (error) => {
+                    clearTimeout(readyTimeout);
+                    client.removeListener('ready', onReady);
                     reject(error);
-                });
+                };
+                
+                client.once('ready', onReady);
+                client.once('error', onError);
             });
             
             console.log('🎉 Bot is fully connected and ready!');
-            return; // Success, exit retry loop
+            return; // Success!
             
         } catch (error) {
-            console.error(`❌ Connection attempt ${i + 1} failed:`, error.message);
+            lastError = error;
+            console.error(`❌ Connection attempt ${attempt} failed:`, error.message);
             
             if (error.code) {
                 console.error('Discord Error Code:', error.code);
                 
-                // Handle specific Discord error codes
-                switch (error.code) {
-                    case 'TOKEN_INVALID':
-                        console.error('❌ Invalid Discord token. Please check your DISCORD_TOKEN environment variable.');
-                        process.exit(1);
-                        break;
-                    case 'DISALLOWED_INTENTS':
-                        console.error('❌ Bot is missing required intents. Please enable them in Discord Developer Portal.');
-                        process.exit(1);
-                        break;
+                // Handle specific error codes that shouldn't retry
+                if (error.code === 'TOKEN_INVALID') {
+                    console.error('❌ Invalid Discord token. Please check your DISCORD_TOKEN.');
+                    process.exit(1);
+                }
+                
+                if (error.code === 'DISALLOWED_INTENTS') {
+                    console.error('❌ Bot missing required intents. Check Discord Developer Portal.');
+                    process.exit(1);
                 }
             }
             
-            // Destroy the client to clean up connections
-            if (client.isReady()) {
-                client.destroy();
+            // Clean up the client for next attempt
+            try {
+                if (client.ws && client.ws.connection) {
+                    client.destroy();
+                }
+            } catch (cleanupError) {
+                console.error('Error during cleanup:', cleanupError.message);
             }
             
-            if (i === maxRetries - 1) {
-                console.error('❌ Max retries reached. Exiting...');
-                process.exit(1);
+            if (attempt < maxRetries) {
+                const waitTime = Math.min(10000 * attempt, 30000); // Progressive backoff
+                console.log(`⏳ Waiting ${waitTime/1000} seconds before retry...`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
             }
-            
-            const waitTime = Math.min(5000 * (i + 1), 30000); // Exponential backoff, max 30s
-            console.log(`⏳ Waiting ${waitTime/1000} seconds before retry...`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
         }
     }
+    
+    console.error('❌ All connection attempts failed. Last error:', lastError?.message);
+    process.exit(1);
 }
 
-// Handle process termination gracefully
-process.on('SIGINT', () => {
-    console.log('🛑 Received SIGINT, shutting down gracefully...');
-    if (client.isReady()) {
-        client.destroy();
+// Handle graceful shutdown
+const shutdown = (signal) => {
+    console.log(`🛑 Received ${signal}, shutting down gracefully...`);
+    
+    try {
+        if (client.isReady()) {
+            client.destroy();
+        }
+    } catch (error) {
+        console.error('Error during shutdown:', error.message);
     }
+    
     process.exit(0);
+};
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// Handle uncaught errors
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    shutdown('uncaughtException');
 });
 
-process.on('SIGTERM', () => {
-    console.log('🛑 Received SIGTERM, shutting down gracefully...');
-    if (client.isReady()) {
-        client.destroy();
-    }
-    process.exit(0);
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    shutdown('unhandledRejection');
 });
 
 // Start the bot
 console.log('🚀 Starting Discord bot connection...');
 connectWithRetry().catch(error => {
-    console.error('❌ Fatal error during bot startup:', error);
+    console.error('❌ Fatal startup error:', error);
     process.exit(1);
 });
