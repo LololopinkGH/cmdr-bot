@@ -2,7 +2,7 @@
   "name": "discord-roblox-bridge",
   "version": "1.0.0",
   "type": "module",
-  "main": "start.js",
+  "main": "start-single.js",
   "scripts": {
     "start": "node start-single.js",
     "test": "echo \"Error: no test specified\" && exit 1"
