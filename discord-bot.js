@@ -1,4 +1,4 @@
-// discord-bot.js - ES Module version for Render
+// discord-bot.js - ES Module version for Render (Clean version without node-fetch)
 import { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes, EmbedBuilder } from 'discord.js';
 import axios from 'axios';
 import 'dotenv/config';
