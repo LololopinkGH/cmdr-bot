@@ -112,6 +112,12 @@ app.get('/api/result/:commandId', (req, res) => {
 
 // Use PORT environment variable (Render assigns this)
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Bridge server running on port ${PORT}`);
 });
+
+// Keep-alive mechanism to prevent Render from sleeping the service
+setInterval(() => {
+    console.log(`💓 Heartbeat - Server alive at ${new Date().toISOString()}`);
+    console.log(`📊 Stats: ${commandQueue.size} queued, ${commandResults.size} results`);
+}, 300000); // Every 5 minutes
