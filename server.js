@@ -1,8 +1,8 @@
-// server.js - Fixed for Render
-const express = require('express');
-const cors = require('cors');
-const { v4: uuidv4 } = require('uuid');
-require('dotenv').config();
+// server.js - ES Module version for Render
+import express from 'express';
+import cors from 'cors';
+import { v4 as uuidv4 } from 'uuid';
+import 'dotenv/config';
 
 const app = express();
 app.use(cors());
@@ -110,7 +110,7 @@ app.get('/api/result/:commandId', (req, res) => {
     res.json(result);
 });
 
-// FIX: Use PORT environment variable (Render assigns this)
+// Use PORT environment variable (Render assigns this)
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Bridge server running on port ${PORT}`);

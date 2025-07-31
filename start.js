@@ -1,6 +1,10 @@
-// start.js - Alternative approach with staggered startup
-const { spawn } = require('child_process');
-const path = require('path');
+// start.js - ES Module version for Render
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 console.log('🚀 Starting Discord-Roblox Bridge...\n');
 
