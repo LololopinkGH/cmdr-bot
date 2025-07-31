@@ -11,15 +11,15 @@ const client = new Client({
     ]
 });
 
-// Use localhost for internal communication on Render, or the environment variable if set
-const SERVER_URL = process.env.SERVER_URL || 'http://localhost:10000';
+// Use the public URL for Render deployment
+const SERVER_URL = process.env.SERVER_URL || 'https://cmdr-bot.onrender.com';
 console.log('Using SERVER_URL:', SERVER_URL);
 
 // Debug: Log all environment variables (remove in production)
 console.log('Environment check:');
 console.log('- DISCORD_TOKEN:', process.env.DISCORD_TOKEN ? '✅ Set' : '❌ Missing');
 console.log('- GUILD_ID:', process.env.GUILD_ID ? '✅ Set' : '❌ Missing');
-console.log('- SERVER_URL:', process.env.SERVER_URL || 'Using default');
+console.log('- SERVER_URL:', SERVER_URL);
 console.log('- PORT:', process.env.PORT || 'Using default');
 
 // Check required environment variables
@@ -33,20 +33,13 @@ if (!process.env.GUILD_ID) {
     process.exit(1);
 }
 
-// User ID mapping (Discord ID -> Roblox UserId)
+// User ID mapping (Discord ID -> Roblox UserId)  
 const userMapping = {
-    // Add your Discord ID -> Roblox UserId mapping here
-    // To find your Discord ID: Enable Developer Mode in Discord, right-click your name, "Copy User ID"
-    // Example: '123456789012345678': 1346667455,
-    // Add your mapping below:
     '1252626721522454574': 1346667455,
 };
 
 // Server ID mapping (for multi-server support)
 const serverMapping = {
-    // Add your Discord channel ID -> server identifier mapping
-    // To find channel ID: Right-click channel name, "Copy Channel ID"
-    // Example: '1234567890123456789': 'main_server'
     '1395135448522821632': 'main_server'
 };
 
@@ -103,7 +96,7 @@ async function executeRobloxCommand(discordUserId, command, args, serverId) {
     
     try {
         const response = await axios.post(`${SERVER_URL}/api/command`, payload, {
-            timeout: 5000, // 5 second timeout
+            timeout: 10000, // Increased timeout
             headers: {
                 'Content-Type': 'application/json'
             }
@@ -152,6 +145,7 @@ async function getCommandResult(commandId, maxWait = 10000) {
 client.on('ready', async () => {
     console.log(`✅ Discord bot logged in as ${client.user.tag}`);
     console.log(`🔗 Connected to ${client.guilds.cache.size} guild(s)`);
+    console.log(`🏠 Bot is in guilds:`, client.guilds.cache.map(g => g.name).join(', '));
     await deployCommands();
 });
 
@@ -161,6 +155,18 @@ client.on('error', (error) => {
 
 client.on('warn', (warning) => {
     console.warn('⚠️ Discord client warning:', warning);
+});
+
+client.on('disconnect', (event) => {
+    console.log('🔌 Disconnected from Discord:', event);
+});
+
+client.on('reconnecting', () => {
+    console.log('🔄 Reconnecting to Discord...');
+});
+
+client.on('resume', () => {
+    console.log('▶️ Resumed Discord connection');
 });
 
 client.on('interactionCreate', async interaction => {
@@ -234,60 +240,104 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Add connection retry logic with timeout
+// Improved connection function with better error handling
 async function connectWithRetry(maxRetries = 5) {
     for (let i = 0; i < maxRetries; i++) {
         try {
             console.log(`🔄 Attempting to connect to Discord (attempt ${i + 1}/${maxRetries})...`);
             
-            // Create a timeout promise
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Connection timeout after 30 seconds')), 30000);
+            // Set up a timeout for the login process
+            const loginTimeout = new Promise((_, reject) => {
+                setTimeout(() => {
+                    reject(new Error(`Discord login timeout after 45 seconds (attempt ${i + 1})`));
+                }, 45000);
             });
             
-            // Race between login and timeout
+            // Attempt to login with timeout
             await Promise.race([
                 client.login(process.env.DISCORD_TOKEN),
-                timeoutPromise
+                loginTimeout
             ]);
             
-            console.log('🎉 Login promise resolved, waiting for ready event...');
-            break;
+            console.log('✅ Login successful, waiting for ready event...');
+            
+            // Wait for ready event with timeout
+            await new Promise((resolve, reject) => {
+                const readyTimeout = setTimeout(() => {
+                    reject(new Error('Ready event timeout after 30 seconds'));
+                }, 30000);
+                
+                client.once('ready', () => {
+                    clearTimeout(readyTimeout);
+                    resolve();
+                });
+                
+                // Also listen for errors during ready wait
+                client.once('error', (error) => {
+                    clearTimeout(readyTimeout);
+                    reject(error);
+                });
+            });
+            
+            console.log('🎉 Bot is fully connected and ready!');
+            return; // Success, exit retry loop
+            
         } catch (error) {
             console.error(`❌ Connection attempt ${i + 1} failed:`, error.message);
+            
             if (error.code) {
-                console.error('Error code:', error.code);
+                console.error('Discord Error Code:', error.code);
+                
+                // Handle specific Discord error codes
+                switch (error.code) {
+                    case 'TOKEN_INVALID':
+                        console.error('❌ Invalid Discord token. Please check your DISCORD_TOKEN environment variable.');
+                        process.exit(1);
+                        break;
+                    case 'DISALLOWED_INTENTS':
+                        console.error('❌ Bot is missing required intents. Please enable them in Discord Developer Portal.');
+                        process.exit(1);
+                        break;
+                }
             }
+            
+            // Destroy the client to clean up connections
+            if (client.isReady()) {
+                client.destroy();
+            }
+            
             if (i === maxRetries - 1) {
                 console.error('❌ Max retries reached. Exiting...');
                 process.exit(1);
             }
-            console.log(`⏳ Waiting 5 seconds before retry...`);
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            
+            const waitTime = Math.min(5000 * (i + 1), 30000); // Exponential backoff, max 30s
+            console.log(`⏳ Waiting ${waitTime/1000} seconds before retry...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
         }
     }
 }
 
-// Add more event listeners for debugging
-client.on('debug', (info) => {
-    // Only log important debug info to avoid spam
-    if (info.includes('Heartbeat') || info.includes('Session') || info.includes('Ready')) {
-        console.log('🐛 Discord Debug:', info);
+// Handle process termination gracefully
+process.on('SIGINT', () => {
+    console.log('🛑 Received SIGINT, shutting down gracefully...');
+    if (client.isReady()) {
+        client.destroy();
     }
+    process.exit(0);
 });
 
-client.on('disconnect', () => {
-    console.log('🔌 Disconnected from Discord');
-});
-
-client.on('reconnecting', () => {
-    console.log('🔄 Reconnecting to Discord...');
-});
-
-client.on('resume', () => {
-    console.log('▶️ Resumed Discord connection');
+process.on('SIGTERM', () => {
+    console.log('🛑 Received SIGTERM, shutting down gracefully...');
+    if (client.isReady()) {
+        client.destroy();
+    }
+    process.exit(0);
 });
 
 // Start the bot
 console.log('🚀 Starting Discord bot connection...');
-connectWithRetry();
+connectWithRetry().catch(error => {
+    console.error('❌ Fatal error during bot startup:', error);
+    process.exit(1);
+});
