@@ -1,4 +1,4 @@
-// server.js
+// server.js - Fixed for Render
 const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
@@ -110,6 +110,7 @@ app.get('/api/result/:commandId', (req, res) => {
     res.json(result);
 });
 
+// FIX: Use PORT environment variable (Render assigns this)
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Bridge server running on port ${PORT}`);
