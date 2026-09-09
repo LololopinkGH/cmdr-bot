@@ -13,21 +13,30 @@ const client = new Client({
     ]
 });
 
-const SERVER_URL = process.env.SERVER_URL || 'https://cmdr-bot.onrender.com';
+const SERVER_URL = process.env.SERVER_URL || `http://127.0.0.1:${Number(process.env.PORT) || 10000}`;
 const COMMAND_API_SECRET = (process.env.COMMAND_API_SECRET || '').trim();
-if (!COMMAND_API_SECRET) {
-    throw new Error('COMMAND_API_SECRET is required');
-}
 console.log('Using SERVER_URL:', SERVER_URL);
 
 function signedHeaders(method, path, body = '') {
+    const headers = {
+        'Content-Type': 'application/json'
+    };
+
+    // In the single Render-service setup the bot calls localhost, so signing is
+    // optional. If a secret is configured, keep signed requests compatible with
+    // split/external deployments.
+    if (!COMMAND_API_SECRET) {
+        return headers;
+    }
+
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const nonce = crypto.randomBytes(16).toString('hex');
     const bodyHash = crypto.createHash('sha256').update(body).digest('hex');
     const canonical = [method.toUpperCase(), path, timestamp, nonce, bodyHash].join('\n');
     const signature = crypto.createHmac('sha256', COMMAND_API_SECRET).update(canonical).digest('hex');
+
     return {
-        'Content-Type': 'application/json',
+        ...headers,
         'X-Area-Timestamp': timestamp,
         'X-Area-Nonce': nonce,
         'X-Area-Signature': signature
