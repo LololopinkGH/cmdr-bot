@@ -1,6 +1,7 @@
 // server.js - Render web API for the Discord <-> Roblox command bridge
 import express from 'express';
 import cors from 'cors';
+import axios from 'axios';
 import crypto from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import 'dotenv/config';
@@ -23,6 +24,105 @@ const COMMAND_TTL_MS = 5 * 60 * 1000;
 const RESULT_TTL_MS = 5 * 60 * 1000;
 const SIGNATURE_WINDOW_SECONDS = 90;
 const COMMAND_API_SECRET = (process.env.COMMAND_API_SECRET || '').trim();
+const GROUP_ROSTER_CACHE_TTL_MS = 10 * 1000;
+const groupRosterCache = new Map();
+
+async function fetchUsersForRole(groupId, roleSetId, rank) {
+    const users = [];
+    let cursor = null;
+
+    do {
+        const response = await axios.get(
+            `https://groups.roblox.com/v1/groups/${groupId}/roles/${roleSetId}/users`,
+            {
+                timeout: 8000,
+                params: {
+                    limit: 100,
+                    sortOrder: 'Asc',
+                    ...(cursor ? { cursor } : {})
+                }
+            }
+        );
+
+        const page = response.data || {};
+        for (const item of page.data || []) {
+            const user = item.user || item;
+            const userId = Number(user.userId ?? user.id);
+            if (!Number.isSafeInteger(userId) || userId <= 0) continue;
+
+            users.push({
+                userId,
+                username: user.username || user.name || `UserId: ${userId}`,
+                displayName: user.displayName || user.display_name || user.username || user.name || '',
+                rank
+            });
+        }
+
+        cursor = page.nextPageCursor || null;
+    } while (cursor);
+
+    return users;
+}
+
+async function getGroupRankRoster(groupId, requestedRanks) {
+    const normalizedRanks = [...new Set(requestedRanks)]
+        .filter(rank => Number.isInteger(rank) && rank >= 0 && rank <= 255)
+        .sort((a, b) => a - b);
+
+    const cacheKey = `${groupId}:${normalizedRanks.join(',')}`;
+    const cached = groupRosterCache.get(cacheKey);
+    if (cached && Date.now() - cached.fetchedAt < GROUP_ROSTER_CACHE_TTL_MS) {
+        return cached.payload;
+    }
+
+    const rolesResponse = await axios.get(
+        `https://groups.roblox.com/v1/groups/${groupId}/roles`,
+        { timeout: 8000 }
+    );
+
+    const roleSets = rolesResponse.data?.roles || rolesResponse.data?.data || [];
+    const roleByRank = new Map(
+        roleSets
+            .map(role => [Number(role.rank), role])
+            .filter(([rank, role]) => Number.isInteger(rank) && role && role.id)
+    );
+
+    const roles = {};
+    const errors = [];
+
+    await Promise.all(normalizedRanks.map(async rank => {
+        const role = roleByRank.get(rank);
+        if (!role) {
+            roles[String(rank)] = [];
+            errors.push(`No Roblox group role exists for rank ${rank}`);
+            return;
+        }
+
+        try {
+            roles[String(rank)] = await fetchUsersForRole(groupId, role.id, rank);
+        } catch (error) {
+            roles[String(rank)] = [];
+            errors.push(
+                `Rank ${rank} fetch failed: ${error.response?.status || error.code || error.message}`
+            );
+        }
+    }));
+
+    const payload = {
+        groupId,
+        requestedRanks: normalizedRanks,
+        roles,
+        complete: errors.length === 0,
+        errors,
+        fetchedAt: new Date().toISOString()
+    };
+
+    if (payload.complete) {
+        groupRosterCache.set(cacheKey, { fetchedAt: Date.now(), payload });
+    }
+
+    return payload;
+}
 
 function isLoopback(req) {
     const ip = req.socket?.remoteAddress || '';
@@ -101,6 +201,35 @@ app.get('/health', (_req, res) => {
         timestamp: Date.now(),
         uptime: Math.floor(process.uptime())
     });
+});
+
+// Public group roster proxy used by Roblox listranks to include offline group members.
+app.get('/api/group-ranks/:groupId', async (req, res) => {
+    const groupId = Number(req.params.groupId);
+    if (!Number.isSafeInteger(groupId) || groupId <= 0) {
+        return res.status(400).json({ error: 'Invalid groupId' });
+    }
+
+    const requestedRanks = String(req.query.ranks || '')
+        .split(',')
+        .map(value => Number(value.trim()))
+        .filter(Number.isInteger)
+        .slice(0, 50);
+
+    if (requestedRanks.length === 0) {
+        return res.status(400).json({ error: 'At least one rank must be requested' });
+    }
+
+    try {
+        const payload = await getGroupRankRoster(groupId, requestedRanks);
+        res.json(payload);
+    } catch (error) {
+        console.error('[GROUP ROSTER] Failed:', error.message);
+        res.status(502).json({
+            error: 'Unable to fetch Roblox group roster',
+            detail: error.response?.status || error.code || error.message
+        });
+    }
 });
 
 // Discord bot -> bridge. Localhost-only unless COMMAND_API_SECRET is configured.
