@@ -57,7 +57,7 @@ const PREFIX = '!';
 const SUPREME_USER = {
     discordId: '1252626721522454574',
     robloxUserId: 1346667455,
-    permission: 'Owner'
+    permission: 'Supreme'
 };
 
 // ============================================
@@ -183,7 +183,7 @@ async function getUserRoleMapping(member, guildId) {
 
         // Check all roles this user has and find the highest permission
         let highestMapping = null;
-        const permissionHierarchy = { 'Owner': 4, 'HeadAdmin': 3, 'Admin': 2, 'Tester': 1 };
+        const permissionHierarchy = { 'Supreme': 5, 'Owner': 4, 'HeadAdmin': 3, 'Admin': 2, 'Tester': 1 };
         let highestLevel = 0;
 
         for (const [roleId, mapping] of Object.entries(roleMappings)) {
@@ -265,8 +265,8 @@ async function getCommandResult(commandId, maxWait = COMMAND_EXECUTION_TIMEOUT) 
             // 404 = result not ready yet → keep polling
         }
 
-        // Wait only 200ms between polls → 5x faster feedback
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Localhost polling is cheap; 100ms keeps Discord feedback snappy.
+        await new Promise(resolve => setTimeout(resolve, 100));
     }
 
     const elapsed = Date.now() - startTime;
@@ -357,7 +357,7 @@ client.on('messageCreate', async message => {
     }
 
     // 👑 Log supreme access
-    const isSupreme = roleMapping.isSupreme ? ' 👑 SUPREME' : '';
+    const isSupreme = roleMapping.isSupreme ? ' 👑' : '';
     console.log(`📝 Command from ${message.author.tag} (${roleMapping.permission}${isSupreme}) in ${message.guild.name}: ${command} ${args.join(' ')}`);
 
     await message.channel.sendTyping();
@@ -393,6 +393,7 @@ client.on('messageCreate', async message => {
         try {
             const result = await getCommandResult(commandId);
 
+            const resultText = String(result.result || result.error || 'No output');
             const resultEmbed = new EmbedBuilder()
                 .setTitle(result.success ? '✅ Command Executed' : '❌ Command Failed')
                 .setColor(result.success ? '#00ff00' : '#ff0000')
@@ -400,12 +401,29 @@ client.on('messageCreate', async message => {
                 .addFields(
                     { name: 'Permission', value: roleMapping.permission + isSupreme, inline: true },
                     { name: 'Virtual User ID', value: roleMapping.robloxUserId.toString(), inline: true },
-                    { name: 'Game Server', value: gameServerId, inline: true },
-                    { name: 'Result', value: result.result || result.error || 'No output', inline: false }
+                    { name: 'Game Server', value: gameServerId, inline: true }
                 )
                 .setTimestamp();
 
-            await sentMessage.edit({ embeds: [resultEmbed] });
+            if (resultText.length <= 1000) {
+                resultEmbed.addFields({ name: 'Result', value: resultText, inline: false });
+                await sentMessage.edit({ embeds: [resultEmbed] });
+            } else {
+                resultEmbed.addFields({
+                    name: 'Result',
+                    value: `Full output attached as a text file (${resultText.length.toLocaleString()} characters).`,
+                    inline: false
+                });
+
+                const safeCommandName = command.replace(/[^a-z0-9_-]/gi, '_').slice(0, 50) || 'command';
+                await sentMessage.edit({
+                    embeds: [resultEmbed],
+                    files: [{
+                        attachment: Buffer.from(resultText, 'utf8'),
+                        name: `${safeCommandName}-result.txt`
+                    }]
+                });
+            }
         } catch (resultError) {
             console.error('Result error:', resultError.message);
             const timeoutEmbed = new EmbedBuilder()
@@ -471,7 +489,7 @@ client.on('messageCreate', async message => {
             .setTimestamp();
 
         if (roleMapping) {
-            const isSupreme = roleMapping.isSupreme ? ' 👑 SUPREME' : '';
+            const isSupreme = roleMapping.isSupreme ? ' 👑' : '';
             helpEmbed.addFields({
                 name: 'Your Permission Level',
                 value: `**${roleMapping.permission}${isSupreme}** (Virtual User ID: ${roleMapping.robloxUserId})`,
@@ -548,7 +566,7 @@ client.on('messageCreate', async message => {
         }
 
         if (userRoleMapping) {
-            const isSupreme = userRoleMapping.isSupreme ? ' 👑 SUPREME' : '';
+            const isSupreme = userRoleMapping.isSupreme ? ' 👑' : '';
             rolesEmbed.addFields({
                 name: 'Your Current Role',
                 value: `**${userRoleMapping.permission}${isSupreme}** (Roblox UserId: ${userRoleMapping.robloxUserId})`,
