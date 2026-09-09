@@ -1,25 +1,23 @@
-# TFRRPG Cmdr Discord Bot
+# Cmdr Discord-Roblox Bridge
 
-Minimal deployment repository for the Cmdr Discord bot.
+This repository is configured to run the Discord bot and the HTTP command bridge together in **one Render Web Service**.
 
-## Northflank
+## Render settings
 
-Create a Combined Service from this repository using Buildpack.
+- Build command: `npm install`
+- Start command: `npm start`
+- Required environment variable: `DISCORD_TOKEN`
+- Optional environment variable: `COMMAND_API_SECRET`
+- Do not set `SERVER_URL` on Render unless you intentionally want the bot to use another bridge. By default it talks to the same service over localhost.
+- Render supplies `PORT` automatically.
 
-Runtime command:
+## Health endpoint
 
-```text
-npm start
-```
+`GET /health`
 
-No public ports are required.
+The existing Roblox bridge endpoints remain:
 
-Set these runtime environment variables in Northflank:
+- `GET /api/commands/:serverId`
+- `POST /api/result`
 
-```text
-DISCORD_TOKEN=<your Discord bot token>
-SERVER_URL=https://cmdr-bot.onrender.com
-COMMAND_API_SECRET=<the same API secret used by the Cmdr backend>
-```
-
-Do not commit `.env` or `node_modules`.
+Discord-side bridge endpoints are local-only unless `COMMAND_API_SECRET` is configured.
