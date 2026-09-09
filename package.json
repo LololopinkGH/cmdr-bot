@@ -1,19 +1,22 @@
 {
-  "name": "discord-roblox-bot",
+  "name": "discord-roblox-bridge",
   "version": "1.0.0",
   "type": "module",
-  "main": "discord-bot.js",
+  "main": "start-single.js",
   "scripts": {
-    "start": "node discord-bot.js",
+    "start": "node start-single.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "Discord bot for Roblox commands - Multi-server support",
+  "description": "Discord to Roblox command bridge",
   "dependencies": {
-    "axios": "1.20.0",
-    "discord.js": "14.27.0",
-    "dotenv": "17.4.2"
+    "axios": "^1.11.0",
+    "cors": "^2.8.5",
+    "discord.js": "^14.21.0",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "uuid": "^11.1.0"
   }
 }
